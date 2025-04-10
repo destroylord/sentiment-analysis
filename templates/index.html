@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <title>Analisis Sentimen</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body>
+    <div class="container mt-5">
+        <h2>Scraping Data dari X</h2>
+        <form id="scrapeForm">
+            <div class="form-group">
+                <label for="keyword">Keyword</label>
+                <input type="text" class="form-control" id="keyword" placeholder="Masukkan keyword (min 3 karakter)" required>
+            </div>
+            <div class="form-group">
+                <label for="startDate">Tanggal Mulai</label>
+                <input type="date" class="form-control" id="startDate" required>
+            </div>
+            <div class="form-group">
+                <label for="endDate">Tanggal Selesai</label>
+                <input type="date" class="form-control" id="endDate" required>
+            </div>
+            <div class="form-group">
+                <label for="authToken">Auth Token X</label>
+                <input type="text" class="form-control" id="authToken" placeholder="Masukkan auth token" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Kumpulkan Data</button>
+        </form>
+        <div id="result" class="mt-3"></div>
+        <a href="/label" class="btn btn-secondary mt-3">Ke Pelabelan Data</a>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = `
+                <div class="progress mt-3">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                </div>
+                <p>Sedang mengumpulkan data...</p>
+            `;
+
+            const keyword = document.getElementById('keyword').value.trim();
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const authToken = document.getElementById('authToken').value.trim();
+
+            if (keyword.length < 3) {
+                resultDiv.innerHTML = 'Keyword minimal 3 karakter.';
+                return;
+            }
+            if (!startDate || !endDate) {
+                resultDiv.innerHTML = 'Tanggal harus diisi.';
+                return;
+            }
+            if (new Date(startDate) > new Date(endDate)) {
+                resultDiv.innerHTML = 'Tanggal mulai harus sebelum tanggal selesai.';
+                return;
+            }
+            if (authToken.length < 10) {
+                resultDiv.innerHTML = 'Auth token tidak valid.';
+                return;
+            }
+
+            const data = { keyword, startDate, endDate, authToken };
+            try {
+                let progress = 0;
+                const progressBar = resultDiv.querySelector('.progress-bar');
+                const interval = setInterval(() => {
+                    progress += 10;
+                    if (progress <= 90) progressBar.style.width = `${progress}%`;
+                }, 1000);
+
+                const response = await fetch('/scrape', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                clearInterval(interval);
+                progressBar.style.width = '100%';
+
+                const result = await response.json();
+                resultDiv.innerHTML = result.message;
+                if (result.raw_filename && result.preprocessed_filename) {
+                    resultDiv.innerHTML += `
+                        <br>
+                        <a href="/download/${result.raw_filename}" class="btn btn-success mt-2">Download CSV Asli</a>
+                        <a href="/download/${result.preprocessed_filename}" class="btn btn-success mt-2 ml-2">Download CSV Praproses</a>
+                    `;
+                }
+            } catch (e) {
+                clearInterval(interval);
+                resultDiv.innerHTML = `Error: ${e.message}`;
+            }
+        });
+    </script>
+</body>
+</html>

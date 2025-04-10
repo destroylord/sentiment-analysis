@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Pelabelan Data - Analisis Sentimen</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap4.min.css">
+</head>
+
+<body>
+    <div class="container mt-5">
+        <h2>Pelabelan Data</h2>
+        <form id="labelForm" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="csvFile">Unggah File CSV Praproses (opsional)</label>
+                <input type="file" class="form-control-file" id="csvFile" accept=".csv">
+            </div>
+            <div class="form-group">
+                <label>Metode Pelabelan</label><br>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="method" value="automatic" id="automatic" checked>
+                    <label class="form-check-label" for="automatic">Otomatis</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="method" value="manual" id="manual">
+                    <label class="form-check-label" for="manual">Manual</label>
+                </div>
+            </div>
+            <div class="form-group" id="lexiconOptions">
+                <label>Pilih Lexicon (Otomatis)</label><br>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="lexicon" value="inset" id="inset" checked>
+                    <label class="form-check-label" for="inset">InSet Lexicon <small>(Kamus standar
+                            Indonesia)</small></label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="lexicon" value="vader" id="vader">
+                    <label class="form-check-label" for="vader">VADER <small>(Cepat, adaptasi Indonesia)</small></label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="lexicon" value="sentistrength"
+                        id="sentistrength">
+                    <label class="form-check-label" for="sentistrength">SentiStrength-ID <small>(Dukung
+                            negasi)</small></label>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Mulai Pelabelan</button>
+            <a href="/" class="btn btn-secondary ml-2">Kembali</a>
+        </form>
+        <div id="result" class="mt-3"></div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap4.min.js"></script>
+    <script>
+        const lexiconOptions = document.getElementById('lexiconOptions');
+        document.querySelectorAll('input[name="method"]').forEach(input => {
+            input.addEventListener('change', () => {
+                lexiconOptions.style.display = input.value === 'automatic' ? 'block' : 'none';
+            });
+        });
+        lexiconOptions.style.display = 'block';
+
+        document.getElementById('labelForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<div class="spinner-border" role="status"></div> Sedang memproses...';
+
+            const formData = new FormData();
+            const csvFile = document.getElementById('csvFile');
+            if (csvFile.files[0]) {
+                if (!csvFile.files[0].name.endsWith('.csv')) {
+                    resultDiv.innerHTML = 'File harus berformat CSV.';
+                    return;
+                }
+                formData.append('csvFile', csvFile.files[0]);
+            }
+            const method = document.querySelector('input[name="method"]:checked').value;
+            formData.append('method', method);
+            if (method === 'automatic') {
+                const lexicon = document.querySelector('input[name="lexicon"]:checked').value;
+                formData.append('lexicon', lexicon);
+            }
+
+            try {
+                const response = await fetch('/label', { method: 'POST', body: formData });
+                const result = await response.json();
+                resultDiv.innerHTML = result.message;
+
+                if (result.filename && result.preview_data) {
+                    resultDiv.innerHTML += `
+                        <table id="previewTable" class="table table-bordered mt-3">
+                            <thead><tr><th>Teks</th><th>Sentimen</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                        <a href="/download/${result.filename}" class="btn btn-success mt-2">Download CSV</a>
+                    `;
+                    $('#previewTable').DataTable({
+                        processing: true,
+                        serverSide: true,
+                        ajax: { url: `/preview_data/${result.filename}`, type: 'POST' },
+                        columns: [{ data: 'cleaned_text' }, { data: 'sentiment' }],
+                        pageLength: 10,
+                        language: {
+                            search: "Cari teks:",
+                            lengthMenu: "Tampilkan _MENU_ baris",
+                            info: "Menampilkan _START_ sampai _END_ dari _TOTAL_ baris",
+                            paginate: { first: "Pertama", last: "Terakhir", next: "Selanjutnya", previous: "Sebelumnya" }
+                        }
+                    });
+                } else if (result.method === 'manual' && result.data) {
+                    resultDiv.innerHTML = `
+                        <h4>Edit Label Manual</h4>
+                        <table class="table table-bordered">
+                            <thead><tr><th>Teks</th><th>Sentimen</th></tr></thead>
+                            <tbody id="labelTable">
+                                ${result.data.map((row, i) => `
+                                    <tr>
+                                        <td>${row.cleaned_text || 'Teks kosong'}</td>
+                                        <td>
+                                            <select class="form-control" data-index="${i}">
+                                                <option value="Positif">Positif</option>
+                                                <option value="Negatif">Negatif</option>
+                                                <option value="Netral" selected>Netral</option>
+                                            </select>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                        <button id="saveLabels" class="btn btn-primary mt-3">Simpan Label</button>
+                    `;
+                    document.getElementById('saveLabels').addEventListener('click', async () => {
+                        const labels = Array.from(document.querySelectorAll('#labelTable select'))
+                            .map(select => ({ index: select.dataset.index, sentiment: select.value }));
+                        const saveResponse = await fetch('/save_labels', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ labels, filename: result.original_filename })
+                        });
+                        const saveResult = await saveResponse.json();
+                        resultDiv.innerHTML = saveResult.message;
+                        if (saveResult.filename) {
+                            resultDiv.innerHTML += `
+                                <br><a href="/download/${saveResult.filename}" class="btn btn-success mt-2">Download CSV</a>
+                            `;
+                        }
+                    });
+                }
+            } catch (e) {
+                resultDiv.innerHTML = `Error: ${e.message}`;
+            }
+        });
+    </script>
+</body>
+
+</html>

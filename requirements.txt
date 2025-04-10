@@ -1,0 +1,5 @@
+flask==2.3.2
+pandas==2.0.3
+nltk==3.8.1
+Sastrawi==1.0.1
+vaderSentiment==3.3.2
