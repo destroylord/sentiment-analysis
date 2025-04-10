@@ -13,11 +13,11 @@ from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from flask import Flask, request, jsonify, render_template, send_file
 
-
 app = Flask(__name__)
-OUTPUT_DIR = "tweets"
+OUTPUT_DIR = os.path.join("tweets-data", "tweets")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Setup logging
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -25,6 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Download NLTK resources
 nltk.download('punkt', quiet=True)
 nltk.download('stopwords', quiet=True)
 
@@ -141,17 +142,18 @@ def scrape():
         return jsonify({'message': 'Auth token tidak valid.'}), 400
 
     timestamp = get_timestamp()
-    raw_file = os.path.join(OUTPUT_DIR, f"tweets_{timestamp}.csv")
-    preprocessed_file = os.path.join(OUTPUT_DIR, f"preprocessed_{timestamp}.csv")
+    raw_file_rel = f"tweets/tweets_{timestamp}.csv"
+    raw_file_abs = os.path.abspath(os.path.join("tweets-data", "tweets", f"tweets_{timestamp}.csv"))
+    preprocessed_file = os.path.abspath(os.path.join(OUTPUT_DIR, f"preprocessed_{timestamp}.csv"))
 
-    # Sesuai CLI kamu
     search_keyword = f"{keyword} since:{start_date} until:{end_date} lang:id"
     limit = 50
-    command = f'npx --yes tweet-harvest@2.6.1 -o "{raw_file}" -s "{search_keyword}" -l {limit} --tab "LATEST" --token "{auth_token}"'
+    command = f'npx --yes tweet-harvest@2.6.1 -o "{raw_file_rel}" -s "{search_keyword}" -l {limit} --token "{auth_token}"'
 
     try:
-        logger.info(f"Menjalankan scraping: {command}")
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        logger.info(f"Menjalankan scraping dengan command: {command}")
+        logger.debug(f"Raw file absolut: {raw_file_abs}")
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, cwd=os.path.dirname(__file__))
         logger.debug(f"Return code: {result.returncode}")
         logger.debug(f"Stdout: {result.stdout}")
         logger.debug(f"Stderr: {result.stderr}")
@@ -160,22 +162,33 @@ def scrape():
             logger.error(f"Scraping gagal: {result.stderr}")
             return jsonify({'message': f'Error saat scraping: {result.stderr}'}), 500
         
-        if not os.path.exists(raw_file):
-            logger.info(f"Scraping selesai tapi tidak ada data di file: {raw_file}")
+        if not os.path.exists(raw_file_abs):
+            logger.info(f"Scraping selesai tapi tidak ada data di file: {raw_file_abs}")
             return jsonify({'message': 'Scraping selesai tapi tidak ada data. Mungkin token invalid atau tidak ada tweet.'}), 200
 
-        df = pd.read_csv(raw_file)
-        if 'text' not in df.columns:
-            logger.error("Kolom 'text' tidak ada di CSV.")
-            return jsonify({'message': 'Kolom "text" tidak ditemukan.'}), 400
-
-        df['cleaned_text'] = df['text'].apply(preprocess_text)
+        df = pd.read_csv(raw_file_abs)
+        logger.debug(f"Kolom di CSV: {list(df.columns)}")
+        
+        if 'full_text' not in df.columns:
+            # Cek alternatif kalau full_text nggak ada
+            text_column = None
+            for col in ['text', 'content']:
+                if col in df.columns:
+                    text_column = col
+                    logger.info(f"Menggunakan kolom alternatif: {col}")
+                    break
+            if not text_column:
+                logger.error(f"Kolom teks tidak ditemukan. Kolom yang ada: {list(df.columns)}")
+                return jsonify({'message': f'Kolom teks ("full_text", "text", atau "content") tidak ditemukan. Kolom yang ada: {list(df.columns)}'}), 400
+            df['full_text'] = df[text_column]
+        
+        df['cleaned_text'] = df['full_text'].apply(preprocess_text)
         df.to_csv(preprocessed_file, index=False)
-        logger.info(f"Scraping dan praproses selesai: {raw_file}, {preprocessed_file}")
+        logger.info(f"Scraping dan praproses selesai: {raw_file_abs}, {preprocessed_file}")
 
         return jsonify({
             'message': 'Data berhasil dikumpulkan dan diproses!',
-            'raw_filename': os.path.basename(raw_file),
+            'raw_filename': os.path.basename(raw_file_abs),
             'preprocessed_filename': os.path.basename(preprocessed_file)
         })
     except Exception as e:
@@ -184,11 +197,11 @@ def scrape():
 
 @app.route('/download/<filename>')
 def download_file(filename):
-    file_path = os.path.join(OUTPUT_DIR, filename)
+    file_path = os.path.abspath(os.path.join(OUTPUT_DIR, filename))
     if not os.path.exists(file_path):
-        logger.warning(f"File tidak ditemukan: {filename}")
+        logger.warning(f"File tidak ditemukan: {file_path}")
         return jsonify({'message': 'File tidak ditemukan.'}), 404
-    logger.info(f"Mengunduh file: {filename}")
+    logger.info(f"Mengunduh file: {file_path}")
     return send_file(file_path, as_attachment=True)
 
 @app.route('/label')
@@ -213,7 +226,7 @@ def label():
             logger.warning(f"File bukan CSV: {csv_file.filename}")
             return jsonify({'message': 'File harus berformat CSV.'}), 400
         timestamp = get_timestamp()
-        input_path = os.path.join(OUTPUT_DIR, f"input_{timestamp}.csv")
+        input_path = os.path.abspath(os.path.join(OUTPUT_DIR, f"input_{timestamp}.csv"))
         csv_file.save(input_path)
     else:
         preprocessed_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "preprocessed_*.csv")))
@@ -231,7 +244,7 @@ def label():
         if method == 'automatic':
             df['sentiment'] = df['cleaned_text'].apply(LEXICON_METHODS[lexicon])
             timestamp = get_timestamp()
-            output_file = os.path.join(OUTPUT_DIR, f"labeled_{timestamp}.csv")
+            output_file = os.path.abspath(os.path.join(OUTPUT_DIR, f"labeled_{timestamp}.csv"))
             df.to_csv(output_file, index=False)
             preview_data = df[['cleaned_text', 'sentiment']].head(100).to_dict(orient='records')
             logger.info(f"Pelabelan otomatis selesai: {output_file}")
@@ -267,9 +280,9 @@ def save_labels():
     original_filename = data['filename']
 
     try:
-        input_path = os.path.join(OUTPUT_DIR, original_filename)
+        input_path = os.path.abspath(os.path.join(OUTPUT_DIR, original_filename))
         if not os.path.exists(input_path):
-            logger.warning(f"File asli tidak ditemukan: {original_filename}")
+            logger.warning(f"File asli tidak ditemukan: {input_path}")
             return jsonify({'message': 'File asli tidak ditemukan.'}), 404
 
         df = pd.read_csv(input_path)
@@ -282,7 +295,7 @@ def save_labels():
             df.at[index, 'sentiment'] = label['sentiment']
         
         timestamp = get_timestamp()
-        output_file = os.path.join(OUTPUT_DIR, f"labeled_{timestamp}.csv")
+        output_file = os.path.abspath(os.path.join(OUTPUT_DIR, f"labeled_{timestamp}.csv"))
         df.to_csv(output_file, index=False)
         logger.info(f"Label manual disimpan: {output_file}")
         return jsonify({
@@ -295,9 +308,9 @@ def save_labels():
 
 @app.route('/preview_data/<filename>', methods=['POST'])
 def preview_data(filename):
-    file_path = os.path.join(OUTPUT_DIR, filename)
+    file_path = os.path.abspath(os.path.join(OUTPUT_DIR, filename))
     if not os.path.exists(file_path):
-        logger.warning(f"File preview tidak ditemukan: {filename}")
+        logger.warning(f"File preview tidak ditemukan: {file_path}")
         return jsonify({'error': 'File tidak ditemukan.'}), 404
 
     try:
